@@ -14,6 +14,7 @@ import (
 
 	"mcp-runtime/internal/cli/cluster/registrycompat"
 	"mcp-runtime/internal/cli/core"
+	"mcp-runtime/internal/cli/registry"
 	"mcp-runtime/pkg/k8sclient"
 
 	corev1 "k8s.io/api/core/v1"
@@ -34,6 +35,10 @@ func deployRegistryClientGo(logger *zap.Logger, namespace string, port int, regi
 		return err
 	}
 	clients, err := platformKubernetesClients()
+	if err != nil {
+		return err
+	}
+	_, err = registryBackendUsesTokenAuth(context.Background(), clients, namespace)
 	if err != nil {
 		return err
 	}
@@ -89,6 +94,10 @@ func deployRegistryClientGo(logger *zap.Logger, namespace string, port int, regi
 		core.Error("Failed to rewrite registry manifest")
 		core.LogStructuredError(logger, wrappedErr, "Failed to rewrite registry manifest")
 		return wrappedErr
+	}
+	manifest, err = registry.PreserveNativeRegistryManifest(context.Background(), clients.Clientset, namespace, manifest)
+	if err != nil {
+		return fmt.Errorf("preserve registry authentication: %w", err)
 	}
 	results, err := k8sclient.ApplyManifestYAML(context.Background(), clients, []byte(manifest), namespace)
 	if err != nil {
@@ -147,6 +156,10 @@ func applyRegistryCompatibilityOverlay(logger *zap.Logger, clients *k8sclient.Cl
 		core.Error("Failed to render registry compatibility overlay")
 		core.LogStructuredError(logger, wrappedErr, "Failed to render registry compatibility overlay")
 		return wrappedErr
+	}
+	manifest, err = registry.PreserveNativeRegistryManifest(context.Background(), clients.Clientset, namespace, manifest)
+	if err != nil {
+		return fmt.Errorf("preserve registry authentication: %w", err)
 	}
 	results, err := k8sclient.ApplyManifestYAML(context.Background(), clients, []byte(manifest), namespace)
 	if err != nil {
@@ -356,4 +369,30 @@ func validateRegistryStorageSize(ctx context.Context, clients *k8sclient.Clients
 		return fmt.Errorf("--registry-storage %s cannot shrink existing PVC %s/%s (current size %s); keep that size or increase it", requested.String(), namespace, core.RegistryPVCName, current.String())
 	}
 	return nil
+}
+
+// Read authentication before applying anything: a failed read must not replace
+// native repository authentication with the public admin-only middleware.
+func registryBackendUsesTokenAuth(ctx context.Context, clients *k8sclient.Clients, namespace string) (bool, error) {
+	deployment, err := clients.Clientset.AppsV1().Deployments(namespace).Get(ctx, core.RegistryServiceName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read registry authentication before setup: %w", err)
+	}
+	for _, container := range deployment.Spec.Template.Spec.Containers {
+		if container.Name != "registry" {
+			continue
+		}
+		for _, value := range container.Env {
+			if value.Name == "REGISTRY_AUTH" {
+				if value.ValueFrom != nil {
+					return false, fmt.Errorf("registry authentication uses an unresolved env source; inspect it before setup")
+				}
+				return strings.TrimSpace(value.Value) == "token", nil
+			}
+		}
+	}
+	return false, nil
 }

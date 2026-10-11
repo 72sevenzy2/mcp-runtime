@@ -7,6 +7,12 @@ Earlier release notes remain available in [GitHub Releases](https://github.com/m
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-11
+
+### Security
+
+- Full setup keeps public registry ingress authentication active during image publication and on failed builds. Setup reruns preserve native registry token authentication, its ClusterIP Service, the platform token signer, and runtime pull configuration ([#690](https://github.com/mcp-runtime/mcp-runtime/issues/690)).
+
 ## [0.7.0] - 2026-10-10
 
 This release enables native registry authentication by default for production-shaped
@@ -300,7 +306,8 @@ upgrade from 0.4.x; see the migration note under **Changed**.
 
 - Targeted platform updates through `mcp-runtime update`, including embedded CRD updates and `--build` to build/push missing component images before rollout ([#491](https://github.com/mcp-runtime/mcp-runtime/pull/491)).
 
-[Unreleased]: https://github.com/mcp-runtime/mcp-runtime/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/mcp-runtime/mcp-runtime/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/mcp-runtime/mcp-runtime/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/mcp-runtime/mcp-runtime/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/mcp-runtime/mcp-runtime/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/mcp-runtime/mcp-runtime/compare/v0.6.4...v0.6.5

@@ -15,6 +15,11 @@ import (
 	"strings"
 )
 
+// PreserveNativeRegistryManifest retains native authentication during setup reapplication.
+func PreserveNativeRegistryManifest(ctx context.Context, cs kubernetes.Interface, namespace, manifest string) (string, error) {
+	return preserveNativeRegistryManifest(ctx, cs, namespace, manifest)
+}
+
 // Keep setup and compatibility-overlay reapplication from dropping native auth.
 func preserveNativeRegistryManifest(ctx context.Context, cs kubernetes.Interface, namespace, manifest string) (string, error) {
 	dep, err := cs.AppsV1().Deployments(namespace).Get(ctx, "registry", metav1.GetOptions{})
@@ -28,7 +33,10 @@ func preserveNativeRegistryManifest(ctx context.Context, cs kubernetes.Interface
 	for i := range dep.Spec.Template.Spec.Containers {
 		container := &dep.Spec.Template.Spec.Containers[i]
 		for _, env := range container.Env {
-			if env.Name == "REGISTRY_AUTH" && env.Value == "token" {
+			if env.Name == "REGISTRY_AUTH" && env.ValueFrom != nil {
+				return "", fmt.Errorf("registry authentication uses an unresolved env source")
+			}
+			if env.Name == "REGISTRY_AUTH" && strings.TrimSpace(env.Value) == "token" {
 				source = container
 			}
 		}

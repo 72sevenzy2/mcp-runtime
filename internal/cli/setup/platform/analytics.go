@@ -768,6 +768,14 @@ func applyRenderedManifest(kubectl core.KubectlRunner, manifestPath string, imag
 	if err != nil {
 		return core.WrapWithBase(core.ErrSetupRenderManifestFailed, err, fmt.Sprintf("render manifest %s: %v", manifestPath, err))
 	}
+	clients, err := platformKubernetesClients()
+	if err != nil {
+		return err
+	}
+	rendered, err = preserveNativePlatformManifest(context.Background(), clients.Clientset, rendered)
+	if err != nil {
+		return fmt.Errorf("preserve native authentication for %s: %w", manifestPath, err)
+	}
 	rendered, err = stampDependencyRevisionsClientGo(rendered)
 	if err != nil {
 		return fmt.Errorf("plan dependency rollouts for %s: %w", manifestPath, err)
@@ -793,6 +801,14 @@ func applyRenderedManifestClientGo(manifestPath string, images AnalyticsImageSet
 	}
 	if err != nil {
 		return core.WrapWithBase(core.ErrSetupRenderManifestFailed, err, fmt.Sprintf("render manifest %s: %v", manifestPath, err))
+	}
+	clients, err := platformKubernetesClients()
+	if err != nil {
+		return err
+	}
+	rendered, err = preserveNativePlatformManifest(context.Background(), clients.Clientset, rendered)
+	if err != nil {
+		return fmt.Errorf("preserve native authentication for %s: %w", manifestPath, err)
 	}
 	rendered, err = stampDependencyRevisionsClientGo(rendered)
 	if err != nil {
