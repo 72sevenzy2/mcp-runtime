@@ -23,7 +23,7 @@ func TestRegistryRequestedSizeRenderedBeforeCreateAndShrinkRejected(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	rendered, err := mutateRegistryManifest(string(raw), "", "", "5Gi", false)
+	rendered, err := mutateRegistryManifest(string(raw), "", "", "5Gi")
 	if err != nil {
 		t.Fatal(err)
 	}

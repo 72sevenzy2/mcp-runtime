@@ -14,6 +14,7 @@ import (
 
 	"mcp-runtime/internal/cli/cluster/registrycompat"
 	"mcp-runtime/internal/cli/core"
+	"mcp-runtime/internal/cli/registry"
 	"mcp-runtime/pkg/k8sclient"
 
 	corev1 "k8s.io/api/core/v1"
@@ -37,7 +38,7 @@ func deployRegistryClientGo(logger *zap.Logger, namespace string, port int, regi
 	if err != nil {
 		return err
 	}
-	nativeAuth, err := registryBackendUsesTokenAuth(context.Background(), clients, namespace)
+	_, err = registryBackendUsesTokenAuth(context.Background(), clients, namespace)
 	if err != nil {
 		return err
 	}
@@ -82,7 +83,7 @@ func deployRegistryClientGo(logger *zap.Logger, namespace string, port int, regi
 	if logger != nil {
 		logger.Info("Resolved registry ingress host", zap.String("host", registryHost), zap.String("source", registryHostSource))
 	}
-	manifest, err = mutateRegistryManifest(manifest, registryHost, overrideImage, registryStorageSize, nativeAuth)
+	manifest, err = mutateRegistryManifest(manifest, registryHost, overrideImage, registryStorageSize)
 	if err != nil {
 		wrappedErr := core.WrapWithBaseAndContext(
 			core.ErrDeployRegistryFailed,
@@ -93,6 +94,10 @@ func deployRegistryClientGo(logger *zap.Logger, namespace string, port int, regi
 		core.Error("Failed to rewrite registry manifest")
 		core.LogStructuredError(logger, wrappedErr, "Failed to rewrite registry manifest")
 		return wrappedErr
+	}
+	manifest, err = registry.PreserveNativeRegistryManifest(context.Background(), clients.Clientset, namespace, manifest)
+	if err != nil {
+		return fmt.Errorf("preserve registry authentication: %w", err)
 	}
 	results, err := k8sclient.ApplyManifestYAML(context.Background(), clients, []byte(manifest), namespace)
 	if err != nil {
@@ -152,6 +157,10 @@ func applyRegistryCompatibilityOverlay(logger *zap.Logger, clients *k8sclient.Cl
 		core.LogStructuredError(logger, wrappedErr, "Failed to render registry compatibility overlay")
 		return wrappedErr
 	}
+	manifest, err = registry.PreserveNativeRegistryManifest(context.Background(), clients.Clientset, namespace, manifest)
+	if err != nil {
+		return fmt.Errorf("preserve registry authentication: %w", err)
+	}
 	results, err := k8sclient.ApplyManifestYAML(context.Background(), clients, []byte(manifest), namespace)
 	if err != nil {
 		wrappedErr := core.WrapWithBaseAndContext(
@@ -192,7 +201,7 @@ func validateRegistryType(registryType string) error {
 	}
 }
 
-func mutateRegistryManifest(manifest, host, overrideImage, storageSize string, nativeAuth bool) (string, error) {
+func mutateRegistryManifest(manifest, host, overrideImage, storageSize string) (string, error) {
 	host = strings.TrimSpace(host)
 	overrideImage = strings.TrimSpace(overrideImage)
 	replaceHost := host != "" && host != "registry.local"
@@ -218,23 +227,6 @@ func mutateRegistryManifest(manifest, host, overrideImage, storageSize string, n
 			if err := unstructured.SetNestedField(obj.Object, storageSize, "spec", "resources", "requests", "storage"); err != nil {
 				return "", err
 			}
-		}
-		if nativeAuth && obj.GetKind() == "Ingress" && obj.GetName() == core.RegistryServiceName {
-			annotations := obj.GetAnnotations()
-			key := "traefik.ingress.kubernetes.io/router.middlewares"
-			var retained []string
-			for _, value := range strings.Split(annotations[key], ",") {
-				value = strings.TrimSpace(value)
-				if value != "" && value != registryAdminAuthMiddleware {
-					retained = append(retained, value)
-				}
-			}
-			if len(retained) == 0 {
-				delete(annotations, key)
-			} else {
-				annotations[key] = strings.Join(retained, ",")
-			}
-			obj.SetAnnotations(annotations)
 		}
 		removeRegistryClusterIssuerAnnotation(obj)
 		if overrideImage != "" && setRegistryDeploymentImage(obj, overrideImage) {

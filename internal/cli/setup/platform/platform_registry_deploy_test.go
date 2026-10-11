@@ -49,7 +49,7 @@ spec:
   - host: registry.local
 `
 
-	rendered, err := mutateRegistryManifest(manifest, "registry.example.com", "registry.example.com/registry:2.8.3", "", false)
+	rendered, err := mutateRegistryManifest(manifest, "registry.example.com", "registry.example.com/registry:2.8.3", "")
 	if err != nil {
 		t.Fatalf("mutateRegistryManifest() error = %v", err)
 	}
@@ -75,18 +75,16 @@ metadata:
   annotations:
     traefik.ingress.kubernetes.io/router.middlewares: registry-admin-auth@file,rate-limit@file
 `
-	for _, native := range []bool{false, true} {
-		rendered, err := mutateRegistryManifest(manifest, "registry.example.com", "", "", native)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(rendered, registryAdminAuthMiddleware) == native {
-			t.Fatalf("native=%v: unexpected public authentication: %s", native, rendered)
-		}
-		if !strings.Contains(rendered, "rate-limit@file") {
-			t.Fatal("lost unrelated middleware")
+	rendered, err := mutateRegistryManifest(manifest, "registry.example.com", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, middleware := range []string{registryAdminAuthMiddleware, "rate-limit@file"} {
+		if !strings.Contains(rendered, middleware) {
+			t.Fatalf("lost ingress protection %s: %s", middleware, rendered)
 		}
 	}
+
 }
 
 func TestRegistryBackendAuthReadFailsClosed(t *testing.T) {
