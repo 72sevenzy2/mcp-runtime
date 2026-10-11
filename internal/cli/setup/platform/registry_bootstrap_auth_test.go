@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -163,11 +164,16 @@ func TestNativePullCredentialsSurviveSetup(t *testing.T) {
 	t.Setenv("MCP_REGISTRY_ENDPOINT", "registry.example.com")
 	t.Setenv("MCP_REGISTRY_HOST", "registry.example.com")
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: defaultRegistrySecretName, Namespace: "mcp-runtime", Labels: map[string]string{"mcpruntime.org/registry-auth": "pull"}}, Type: corev1.SecretTypeDockerConfigJson, Data: map[string][]byte{corev1.DockerConfigJsonKey: []byte("existing-scoped-credential")}}
-	clients := newPlatformKubernetesTestClients([]runtime.Object{secret}, nil)
+	native := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "registry", Namespace: "registry"}}
+	native.Spec.Template.Spec.Containers = []corev1.Container{{Name: "registry", Env: []corev1.EnvVar{{Name: "REGISTRY_AUTH", Value: "token"}}}}
+	clients := newPlatformKubernetesTestClients([]runtime.Object{secret, native}, nil)
 	swapKubernetesClientsForTest(t, clients)
 	name, err := ensureBundledPublicRegistryPullSecretClientGo("mcp-runtime", []string{"registry.example.com/operator:release"})
 	if err != nil || name != defaultRegistrySecretName {
 		t.Fatalf("%s,%v", name, err)
+	}
+	if _, err := ensureBundledPublicRegistryPullSecretClientGo("missing-scope", []string{"registry.example.com/operator:release"}); err == nil {
+		t.Fatal("must not fall back to a platform admin credential for native pulls")
 	}
 	for _, action := range clients.Clientset.(*fake.Clientset).Actions() {
 		if action.GetVerb() != "get" {
@@ -218,5 +224,37 @@ func TestOperatorPublicPullSecretIsPreparedBeforeFirstDeployment(t *testing.T) {
 	}
 	if !deployed {
 		t.Fatal("deployment not exercised")
+	}
+}
+
+func TestFreshRegistryReplacesRestoredNativePullCredentialForBootstrap(t *testing.T) {
+	original := core.DefaultCLIConfig
+	core.DefaultCLIConfig = &core.CLIConfig{RegistryEndpoint: "registry.example.com", RegistryIngressHost: "registry.example.com"}
+	t.Cleanup(func() { core.DefaultCLIConfig = original })
+	t.Setenv("MCP_REGISTRY_ENDPOINT", "registry.example.com")
+	namespace, name, err := ownedCredential("UI_API_KEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}, Data: map[string][]byte{"UI_API_KEY": []byte("fresh-bootstrap-test-key")}}
+	stale := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: defaultRegistrySecretName, Namespace: "mcp-runtime", Labels: map[string]string{"mcpruntime.org/registry-auth": "pull"}}, Type: corev1.SecretTypeDockerConfigJson, Data: map[string][]byte{corev1.DockerConfigJsonKey: []byte("restored-old-scope")}}
+	clients := newPlatformKubernetesTestClients([]runtime.Object{owner, stale}, nil)
+	swapKubernetesClientsForTest(t, clients)
+	if _, err := ensureBundledPublicRegistryPullSecretClientGo("mcp-runtime", []string{"registry.example.com/operator:release"}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := clients.Clientset.CoreV1().Secrets("mcp-runtime").Get(context.Background(), defaultRegistrySecretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var docker struct {
+		Auths map[string]struct{ Username, Password string }
+	}
+	if err := json.Unmarshal(after.Data[corev1.DockerConfigJsonKey], &docker); err != nil {
+		t.Fatal(err)
+	}
+	entry := docker.Auths["registry.example.com"]
+	if entry.Username != "platform-service" || entry.Password != "fresh-bootstrap-test-key" {
+		t.Fatal("fresh bootstrap reused a credential tied to the previous registry database")
 	}
 }

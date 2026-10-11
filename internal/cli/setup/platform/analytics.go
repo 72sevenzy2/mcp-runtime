@@ -1687,8 +1687,15 @@ func ensureBundledPublicRegistryPullSecretClientGo(namespace string, images []st
 	if err != nil {
 		return "", err
 	}
-	if nativeRegistryPullSecret(context.Background(), clients, namespace) {
-		return defaultRegistrySecretName, nil
+	native, err := registryBackendUsesTokenAuth(context.Background(), clients, core.NamespaceRegistry)
+	if err != nil {
+		return "", err
+	}
+	if native {
+		if nativeRegistryPullSecret(context.Background(), clients, namespace) {
+			return defaultRegistrySecretName, nil
+		}
+		return "", fmt.Errorf("native registry pull credentials missing in namespace %q; reconcile with registry enable-auth before setup", namespace)
 	}
 	uiNamespace, uiSecret, err := ownedCredential("UI_API_KEY")
 	if err != nil {
