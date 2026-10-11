@@ -11,6 +11,8 @@ Earlier release notes remain available in [GitHub Releases](https://github.com/m
 
 ### Security
 
+- Fresh public TLS setup uses a hashed bootstrap credential to authenticate registry pulls before the platform API starts, then switches to platform and native token authentication. Operator pull credentials are provisioned before rollout; native scoped pull credentials survive setup reruns ([#694](https://github.com/mcp-runtime/mcp-runtime/issues/694)).
+
 - Full setup keeps public registry ingress authentication active during image publication and on failed builds. Setup reruns preserve native registry token authentication, its ClusterIP Service, the platform token signer, and runtime pull configuration ([#690](https://github.com/mcp-runtime/mcp-runtime/issues/690)).
 
 ## [0.7.0] - 2026-10-10

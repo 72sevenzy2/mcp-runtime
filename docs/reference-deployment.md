@@ -663,6 +663,15 @@ place. The resource inventory is for recovery reference, not bulk
 `kubectl apply`; its selected platform files are consumed by the existing
 setup restore path.
 
+On a fresh public TLS install, setup uses a bcrypt-hashed bootstrap credential
+in a Kubernetes Secret so registry authentication does not depend on a platform
+API that has not pulled its own image yet. The operator receives matching pull
+credentials before rollout. Once the API is ready, setup replaces bootstrap
+authentication with platform forward authentication and enables native tokens;
+the bootstrap middleware and hashed Secret are removed. An interrupted setup
+keeps an authenticated route and can be rerun. Existing native scoped pull
+credentials are preserved.
+
 Full setup keeps public registry ingress authentication enabled while images are
 built and published through the internal registry helper. After native token
 authentication is enabled, setup reruns preserve repository-scoped registry access

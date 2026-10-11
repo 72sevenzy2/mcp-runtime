@@ -16,6 +16,7 @@ import (
 
 // SetupContext carries state shared across setup steps.
 type SetupContext struct {
+	RegistryBootstrapAuth bool
 	Plan                  setupplan.Plan
 	ExternalRegistry      *config.ExternalRegistryConfig
 	UsingExternalRegistry bool
@@ -226,11 +227,13 @@ func buildSetupSteps(ctx *SetupContext) []SetupStep {
 		WithIf(ctx.Plan.TLSEnabled, tlsStep{}).
 		WithIf(strings.TrimSpace(ctx.Plan.MTLSClusterIssuer) != "", workloadPKIStep{}).
 		With(registryStep{}).
+		WithIf(nativeRegistryAuthRequired(ctx.Plan, ctx.UsingExternalRegistry), registryBootstrapAuthStep{}).
 		With(operatorImageStep{}).
 		WithIf(ctx.Plan.DeployAnalytics, analyticsImageStep{}).
 		With(deployOperatorStepCmd{}).
 		WithIf(ctx.Plan.DeployAnalytics, deployAnalyticsStep{}).
 		WithIf(ctx.Plan.DeployMCPAuthServer, mcpAuthServerStep{}).
+		WithIf(nativeRegistryAuthRequired(ctx.Plan, ctx.UsingExternalRegistry), registryBootstrapFinalizeStep{}).
 		With(verifyStep{}).
 		WithIf(nativeRegistryAuthRequired(ctx.Plan, ctx.UsingExternalRegistry), registryNativeAuthStep{}).
 		Build()

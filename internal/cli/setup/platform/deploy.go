@@ -38,7 +38,7 @@ func deployAnalyticsStepCmd(logger *zap.Logger, images AnalyticsImageSet, storag
 
 func deployOperatorStep(logger *zap.Logger, operatorImage, gatewayProxyImage string, extRegistry *config.ExternalRegistryConfig, registrySecretName string, usingExternalRegistry bool, operatorArgs []string, deps SetupDeps) error {
 	core.Info("Deploying operator manifests")
-	imagePullSecretName, err := ensureOperatorImagePullSecret(extRegistry, registrySecretName, deps)
+	imagePullSecretName, err := ensureOperatorImagePullSecret(extRegistry, registrySecretName, deps, operatorImage)
 	if err != nil {
 		wrappedErr := core.WrapWithBaseAndContext(
 			core.ErrApplyImagePullSecretFailed,
@@ -100,11 +100,14 @@ func deployOperatorStep(logger *zap.Logger, operatorImage, gatewayProxyImage str
 	return nil
 }
 
-func ensureOperatorImagePullSecret(extRegistry *config.ExternalRegistryConfig, registrySecretName string, deps SetupDeps) (string, error) {
+func ensureOperatorImagePullSecret(extRegistry *config.ExternalRegistryConfig, registrySecretName string, deps SetupDeps, images ...string) (string, error) {
 	if explicit := platformImagePullSecretOverride(); explicit != "" {
 		return explicit, nil
 	}
 	if extRegistry == nil || strings.TrimSpace(extRegistry.URL) == "" || (extRegistry.Username == "" && extRegistry.Password == "") {
+		if len(images) > 0 && deps.EnsureBundledRegistryPullSecret != nil {
+			return deps.EnsureBundledRegistryPullSecret(core.NamespaceMCPRuntime, images)
+		}
 		return "", nil
 	}
 	secretName := defaultPlatformRegistryPullSecretName

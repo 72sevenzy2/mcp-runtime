@@ -173,6 +173,10 @@ type RegistryManagerAPI interface {
 }
 
 type SetupDeps struct {
+	PrepareRegistryBootstrapAuth    func(*zap.Logger) (bool, error)
+	FinalizeRegistryBootstrapAuth   func(*zap.Logger) error
+	EnsureBundledRegistryPullSecret func(string, []string) (string, error)
+
 	ResolveExternalRegistryConfig   func(*config.ExternalRegistryConfig) (*config.ExternalRegistryConfig, error)
 	ClusterManager                  ClusterManagerAPI
 	RegistryManager                 RegistryManagerAPI
@@ -325,6 +329,15 @@ func (d SetupDeps) withDefaults(logger *zap.Logger) SetupDeps {
 	}
 	if d.GatewayProxyImageFor == nil {
 		d.GatewayProxyImageFor = getGatewayProxyImage
+	}
+	if d.PrepareRegistryBootstrapAuth == nil {
+		d.PrepareRegistryBootstrapAuth = prepareRegistryBootstrapAuthClientGo
+	}
+	if d.FinalizeRegistryBootstrapAuth == nil {
+		d.FinalizeRegistryBootstrapAuth = finalizeRegistryBootstrapAuthClientGo
+	}
+	if d.EnsureBundledRegistryPullSecret == nil {
+		d.EnsureBundledRegistryPullSecret = ensureBundledPublicRegistryPullSecretClientGo
 	}
 	return d
 }

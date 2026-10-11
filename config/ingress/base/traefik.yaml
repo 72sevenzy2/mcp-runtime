@@ -312,7 +312,7 @@ spec:
           - --providers.kubernetesingress=true
           - --providers.kubernetesingress.namespaces=registry,mcp-platform,mcp-observability,mcp-servers,mcp-servers-org,mcp-servers-public
           - --providers.kubernetescrd=true
-          - --providers.kubernetescrd.namespaces=mcp-platform,mcp-observability,mcp-servers,mcp-servers-org,mcp-servers-public
+          - --providers.kubernetescrd.namespaces=registry,mcp-platform,mcp-observability,mcp-servers,mcp-servers-org,mcp-servers-public
           - --entrypoints.web.address=:8000
           - --entrypoints.web.forwardedHeaders.insecure=false
           - --entrypoints.web.http.redirections.entryPoint.to=websecure
