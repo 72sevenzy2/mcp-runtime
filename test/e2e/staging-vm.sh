@@ -448,7 +448,32 @@ stage_setup() {
     [[ -n "${E2E_MCP_AUTH_SIGNING_KEY_SECRET:-}" ]] && args+=(--mcp-auth-signing-key-secret "${E2E_MCP_AUTH_SIGNING_KEY_SECRET}")
   fi
   log "running production-style setup: ${args[*]}"
-  "${BIN}" "${args[@]}" 2>&1 | tee "${ARTIFACT_DIR}/setup.log"
+  # Authentication must never disappear during bootstrap/image publication.
+  # The staging ACME CA is intentionally untrusted here; TLS is checked by
+  # the dedicated certificate/TLS stages. This monitor checks auth only.
+  local auth_stop="${ARTIFACT_DIR}/registry-auth-monitor.stop"
+  local auth_log="${ARTIFACT_DIR}/registry-auth-monitor.log"
+  local auth_violation="${ARTIFACT_DIR}/registry-auth-monitor.violation"
+  local auth_monitor_pid setup_status=0
+  rm -f "${auth_stop}" "${auth_violation}"
+  (
+    while [[ ! -f "${auth_stop}" ]]; do
+      status="$(curl --insecure --silent --show-error --max-time 5 --output /dev/null --write-out '%{http_code}' "https://${REGISTRY_HOST}/v2/" 2>/dev/null || true)"
+      printf '%s %s\n' "$(date -u +%FT%TZ)" "${status}" >>"${auth_log}"
+      if [[ "${status}" == 2?? ]]; then
+        printf 'anonymous registry request succeeded: HTTP %s\n' "${status}" >>"${auth_violation}"
+      fi
+      sleep 2
+    done
+  ) &
+  auth_monitor_pid=$!
+  "${BIN}" "${args[@]}" 2>&1 | tee "${ARTIFACT_DIR}/setup.log" || setup_status=$?
+  touch "${auth_stop}"
+  wait "${auth_monitor_pid}" || true
+  if [[ -s "${auth_violation}" ]]; then
+    fail "anonymous registry access succeeded during setup; see registry-auth-monitor.log"
+  fi
+  return "${setup_status}"
 }
 
 teardown_vm() {

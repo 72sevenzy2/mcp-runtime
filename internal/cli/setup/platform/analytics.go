@@ -1683,6 +1683,20 @@ func ensureBundledPublicRegistryPullSecretClientGo(namespace string, images []st
 	if registryHost == "" {
 		return "", nil
 	}
+	clients, err := platformKubernetesClients()
+	if err != nil {
+		return "", err
+	}
+	native, err := registryBackendUsesTokenAuth(context.Background(), clients, core.NamespaceRegistry)
+	if err != nil {
+		return "", err
+	}
+	if native {
+		if nativeRegistryPullSecret(context.Background(), clients, namespace) {
+			return defaultRegistrySecretName, nil
+		}
+		return "", fmt.Errorf("native registry pull credentials missing in namespace %q; reconcile with registry enable-auth before setup", namespace)
+	}
 	uiNamespace, uiSecret, err := ownedCredential("UI_API_KEY")
 	if err != nil {
 		return "", err
@@ -1693,10 +1707,6 @@ func ensureBundledPublicRegistryPullSecretClientGo(namespace string, images []st
 	}
 	if strings.TrimSpace(password) == "" {
 		return "", fmt.Errorf("cannot create pull secret for public registry %q: %s UI_API_KEY is empty", registryHost, uiSecret)
-	}
-	clients, err := platformKubernetesClients()
-	if err != nil {
-		return "", err
 	}
 	if err := k8sclient.UpsertDockerConfigSecret(context.Background(), clients, namespace, defaultRegistrySecretName, registryHost, "platform-service", password); err != nil {
 		return "", err
