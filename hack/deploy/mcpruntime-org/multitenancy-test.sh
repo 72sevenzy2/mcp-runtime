@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # End-to-end multi-tenant demo setup and verification (platform API only).
 #
@@ -27,7 +28,9 @@ set -euo pipefail
 #
 # Useful options:
 #   RESET=1 hack/deploy/mcpruntime-org/multitenancy-test.sh       # delete demo resources via platform API
-#   SKIP_SETUP=1 hack/deploy/mcpruntime-org/multitenancy-test.sh  # only run verification
+#   SKIP_SETUP=1 requires the existing private profile and saved/explicit demo passwords.
+# This demo deliberately leaves run-named accounts/teams for inspection on disposable infrastructure.
+# It never targets production. Cleanup deletes only the run's server/agent sessions.
 
 # The Staging E2E VM receives the repo as a tarball packaged with
 # `tar --exclude=.git`, so git metadata is absent there and `rev-parse` exits
@@ -43,33 +46,9 @@ fi
 BIN="${BIN:-$ROOT_DIR/bin/mcp-runtime}"
 # shellcheck source=hack/deploy/mcpruntime-org/lib/adapter-readiness.sh
 source "$ROOT_DIR/hack/deploy/mcpruntime-org/lib/adapter-readiness.sh"
+# shellcheck source=hack/deploy/mcpruntime-org/lib/demo-sessions.sh
+source "$ROOT_DIR/hack/deploy/mcpruntime-org/lib/demo-sessions.sh"
 
-# A dotenv is a convenience for local runs, not an override. Sourcing it under
-# `set -a` replaced values the caller had already exported, so a run explicitly
-# aimed at one environment was silently redirected to whichever one .env named
-# -- a caller passing PLATFORM_URL for a disposable E2E host had it swapped for
-# the production platform, and KUBECONFIG along with it. Fill gaps only.
-if [[ -f "$ROOT_DIR/.env" ]]; then
-  while IFS= read -r dotenv_line || [[ -n "$dotenv_line" ]]; do
-    dotenv_line="${dotenv_line#"${dotenv_line%%[![:space:]]*}"}"
-    case "$dotenv_line" in
-      '' | '#'*) continue ;;
-    esac
-    dotenv_line="${dotenv_line#export }"
-    [[ "$dotenv_line" == *=* ]] || continue
-    dotenv_key="${dotenv_line%%=*}"
-    [[ "$dotenv_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-    dotenv_value="${dotenv_line#*=}"
-    case "$dotenv_value" in
-      \"*\") dotenv_value="${dotenv_value:1:${#dotenv_value}-2}" ;;
-      \'*\') dotenv_value="${dotenv_value:1:${#dotenv_value}-2}" ;;
-    esac
-    if [[ -z "${!dotenv_key:-}" ]]; then
-      export "$dotenv_key=$dotenv_value"
-    fi
-  done <"$ROOT_DIR/.env"
-  unset dotenv_line dotenv_key dotenv_value
-fi
 
 require_env() {
   local name="$1"
@@ -83,17 +62,29 @@ require_env() {
 require_env PLATFORM_URL "e.g. http://localhost:18080 for test-mode port-forward"
 require_env MCP_URL "e.g. http://localhost:18080 for test-mode port-forward"
 require_env REGISTRY_HOST "registry hostname for build tagging and tenant registry push target"
+# This provisioning demo belongs only on loopback or the guarded staging domain.
+python3 - "$PLATFORM_URL" "$MCP_URL" "$REGISTRY_HOST" <<'TARGET'
+import sys
+from urllib.parse import urlsplit
+for value in sys.argv[1:]:
+    parsed = urlsplit(value if "://" in value else "https://" + value)
+    host = parsed.hostname or ""
+    if host not in {"localhost", "127.0.0.1", "::1"} and not host.endswith(".e2e.mcpruntime.org"):
+        raise SystemExit("Multitenancy demo is restricted to loopback/disposable E2E hosts; use the hosted acceptance script for production")
+TARGET
+
 
 PLATFORM_URL="${PLATFORM_URL%/}"
 MCP_URL="${MCP_URL%/}"
 MCP_HOST="${MCP_URL#https://}"
 MCP_HOST="${MCP_HOST#http://}"
 MCP_HOST="${MCP_HOST%%/*}"
-MCP_RUNTIME_CONFIG_DIR="${MCP_RUNTIME_CONFIG_DIR:-$HOME/.mcpruntime}"
+MCP_RUNTIME_CONFIG_DIR="${MCP_RUNTIME_CONFIG_DIR:-$(mktemp -d)}"
 CREDS="${MCP_RUNTIME_CONFIG_DIR}/config.json"
 TMP_ROOT="${TMPDIR:-/tmp}"
 TMP_ROOT="${TMP_ROOT%/}"
 RUN_ID="${RUN_ID:-mt$(date +%m%d%H%M%S)-$((RANDOM % 9000 + 1000))}"
+[[ "$RUN_ID" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo 'RUN_ID must be a lowercase resource-name suffix' >&2; exit 2; }
 WORK_DIR="${WORK_DIR:-$TMP_ROOT/mcp-runtime-multitenancy-${RUN_ID}}"
 TAG="${TAG:-v0.1.0}"
 ADAPTER_LISTEN="${ADAPTER_LISTEN:-127.0.0.1:8299}"
@@ -104,14 +95,37 @@ SERVER_CONTEXT="${SERVER_CONTEXT:-$ROOT_DIR/examples/oauth-example-go-2025-11-25
 SERVER_DOCKERFILE="${SERVER_DOCKERFILE:-$SERVER_CONTEXT/Dockerfile}"
 
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@mcpruntime.org}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin@123}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+[[ -n "${ADMIN_TOKEN_INPUT:-}" ]] || : "${ADMIN_PASSWORD:?Supply the disposable test admin password}"
 ADMIN_TOKEN_INPUT="${ADMIN_TOKEN_INPUT:-}"
+# Keep generated demo credentials private and reusable with the same run/profile.
+credential_file="$MCP_RUNTIME_CONFIG_DIR/demo-credentials-$RUN_ID.json"
+if [[ -f "$credential_file" ]]; then
+  ACME_PASSWORD="${ACME_PASSWORD:-$(jq -er .acme "$credential_file")}"
+  GLOBEX_PASSWORD="${GLOBEX_PASSWORD:-$(jq -er .globex "$credential_file")}"
+  TECHCORP_PASSWORD="${TECHCORP_PASSWORD:-$(jq -er .techcorp "$credential_file")}"
+fi
 ACME_EMAIL="${ACME_EMAIL:-acme-owner-${RUN_ID}@example.com}"
-ACME_PASSWORD="${ACME_PASSWORD:-acme-owner-123}"
+if [[ "${SKIP_SETUP:-0}" == 1 ]]; then
+  : "${ACME_PASSWORD:?Supply the existing demo account password}"
+  : "${GLOBEX_PASSWORD:?Supply the existing demo account password}"
+  : "${TECHCORP_PASSWORD:?Supply the existing demo account password}"
+fi
+ACME_PASSWORD="${ACME_PASSWORD:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')}"
 GLOBEX_EMAIL="${GLOBEX_EMAIL:-globex-user-${RUN_ID}@example.com}"
-GLOBEX_PASSWORD="${GLOBEX_PASSWORD:-globex-user-123}"
+GLOBEX_PASSWORD="${GLOBEX_PASSWORD:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')}"
 TECHCORP_EMAIL="${TECHCORP_EMAIL:-techcorp-dev-${RUN_ID}@example.com}"
-TECHCORP_PASSWORD="${TECHCORP_PASSWORD:-techcorp-dev-123}"
+TECHCORP_PASSWORD="${TECHCORP_PASSWORD:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')}"
+mkdir -p "$MCP_RUNTIME_CONFIG_DIR"
+chmod 700 "$MCP_RUNTIME_CONFIG_DIR"
+ACME_PASSWORD="$ACME_PASSWORD" GLOBEX_PASSWORD="$GLOBEX_PASSWORD" TECHCORP_PASSWORD="$TECHCORP_PASSWORD" \
+  python3 - "$credential_file" <<'CREDENTIALS'
+import json, os, sys
+with open(sys.argv[1], "w") as output:
+    json.dump({name: os.environ[name.upper() + "_PASSWORD"] for name in ("acme", "globex", "techcorp")}, output)
+os.chmod(sys.argv[1], 0o600)
+CREDENTIALS
+
 
 ADMIN_PROFILE="${ADMIN_PROFILE:-admin}"
 ACME_PROFILE="${ACME_PROFILE:-acme-owner-${RUN_ID}}"
@@ -130,6 +144,10 @@ TECHCORP_SERVER="${TECHCORP_SERVER:-techcorp-tools-${RUN_ID}}"
 GLOBEX_AGENT_ID="${GLOBEX_AGENT_ID:-}"
 TECHCORP_AGENT_ID="${TECHCORP_AGENT_ID:-}"
 GLOBEX_DENIED_AGENT_ID="${GLOBEX_DENIED_AGENT_ID:-}"
+for owned in "$ACME_SLUG" "$GLOBEX_SLUG" "$TECHCORP_SLUG" "$ACME_SERVER" "$GLOBEX_SERVER" "$TECHCORP_SERVER" "$ACME_NS" "$GLOBEX_NS" "$TECHCORP_NS"; do
+  [[ "$owned" == *"-$RUN_ID" ]] || { echo "Demo resource must end in -$RUN_ID: $owned" >&2; exit 2; }
+done
+
 
 # Quickstart parity: by default tenant users run with only their saved auth
 # profile (no MCP_* registry/domain env), which is how a real user runs the
@@ -165,22 +183,6 @@ need() {
   }
 }
 
-stop_listen_port() {
-  local listen="$1"
-  local port="${listen##*:}"
-  if [[ -z "$port" || "$port" == "$listen" ]]; then
-    return 0
-  fi
-  if ! command -v lsof >/dev/null 2>&1; then
-    return 0
-  fi
-  local pids
-  pids="$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null || true)"
-  if [[ -n "$pids" ]]; then
-    kill $pids >/dev/null 2>&1 || true
-    sleep 0.5
-  fi
-}
 
 wait_for_adapter_proxy() {
   local listen="$1"
@@ -583,7 +585,7 @@ wait_for_rollout() {
   done
 }
 
-delete_all_sessions() {
+delete_demo_sessions() {
   local profile="$1"
   local ns="$2"
   local token
@@ -594,7 +596,7 @@ delete_all_sessions() {
     -H "authorization: Bearer ${token}" \
     "${PLATFORM_URL}/api/v1/runtime/sessions?namespace=${ns}" 2>/dev/null || echo '{"sessions":[]}')"
   local names
-  names="$(echo "$sessions_body" | jq -r '(.sessions // .) | .[].name' 2>/dev/null || true)"
+  names="$(printf '%s' "$sessions_body" | mcpruntime_demo_session_names "$ACME_SERVER" "$GLOBEX_AGENT_ID" "$TECHCORP_AGENT_ID")"
   for name in $names; do
     [[ -z "$name" ]] && continue
     curl -fsS -X DELETE \
@@ -639,7 +641,7 @@ setup_demo() {
   if [[ "${RESET:-0}" == "1" ]]; then
     local _token
     _token="$(profile_token "$ADMIN_PROFILE")"
-    delete_all_sessions "$ADMIN_PROFILE" "$ACME_NS"
+    delete_demo_sessions "$ADMIN_PROFILE" "$ACME_NS"
     for _ns_name in "${ACME_NS}/${ACME_SERVER}-${GLOBEX_SLUG}-grant" "${ACME_NS}/${ACME_SERVER}-${TECHCORP_SLUG}-grant"; do
       local _ns="${_ns_name%%/*}" _name="${_ns_name##*/}"
       curl -fsS -X DELETE -H "x-api-key: ${_token}" -H "authorization: Bearer ${_token}" "${PLATFORM_URL}/api/v1/runtime/grants/${_ns}/${_name}" >/dev/null 2>&1 || true
@@ -701,7 +703,6 @@ verify_no_kubeconfig_ops() {
   echo "=== verify: binary works without KUBECONFIG for non-cluster operations ==="
   local tmp_dir
   tmp_dir="$(mktemp -d)"
-  local tmp_creds="$tmp_dir/config.json"
 
   KUBECONFIG="" MCP_RUNTIME_CONFIG_DIR="$tmp_dir" "$BIN" --help >/dev/null
   KUBECONFIG="" MCP_RUNTIME_CONFIG_DIR="$tmp_dir" "$BIN" auth --help >/dev/null
@@ -808,8 +809,9 @@ adapter_call_add_for() {
   local expected="${10}"
   local agent_id="${11}"
   local adapter_url="http://${listen}"
+  proxy_pid=""
 
-  stop_listen_port "$listen"
+  mcpruntime_adapter_require_free_port "$listen"
   : >"$log_file"
   MCP_PLATFORM_API_PROFILE="$profile" KUBECONFIG="" "$BIN" adapter proxy \
     --platform-url "$PLATFORM_URL" \
@@ -819,7 +821,7 @@ adapter_call_add_for() {
     --agent "$agent_id" \
     --listen "$listen" \
     --auto-refresh >>"$log_file" 2>&1 &
-  local proxy_pid=$!
+  proxy_pid=$!
 
   wait_for_adapter_proxy "$listen" "$log_file"
 
@@ -844,14 +846,18 @@ adapter_call_add_for() {
       echo "initialize returned HTTP ${init_status} for profile ${profile}" >&2
       cat "$init_body" >&2
       kill "$proxy_pid" >/dev/null 2>&1 || true
-      stop_listen_port "$listen"
+      wait "$proxy_pid" 2>/dev/null || true
+      proxy_pid=""
+      mcpruntime_adapter_require_free_port "$listen"
       return 1
     fi
     if [[ $(date +%s) -gt $init_deadline ]]; then
       echo "initialize timed out waiting for gateway route for profile ${profile}; last HTTP ${init_status}" >&2
       cat "$init_body" >&2
       kill "$proxy_pid" >/dev/null 2>&1 || true
-      stop_listen_port "$listen"
+      wait "$proxy_pid" 2>/dev/null || true
+      proxy_pid=""
+      mcpruntime_adapter_require_free_port "$listen"
       return 1
     fi
     echo "waiting for adapter route/session policy (HTTP ${init_status}) for profile ${profile}"
@@ -864,7 +870,9 @@ adapter_call_add_for() {
     echo "initialize did not return Mcp-Session-Id for profile ${profile}" >&2
     cat "$init_body" >&2
     kill "$proxy_pid" >/dev/null 2>&1 || true
-    stop_listen_port "$listen"
+    wait "$proxy_pid" 2>/dev/null || true
+    proxy_pid=""
+    mcpruntime_adapter_require_free_port "$listen"
     return 1
   fi
 
@@ -884,7 +892,9 @@ adapter_call_add_for() {
     echo "notifications/initialized returned HTTP ${status} for profile ${profile}" >&2
     cat "$notify_body" >&2
     kill "$proxy_pid" >/dev/null 2>&1 || true
-    stop_listen_port "$listen"
+    wait "$proxy_pid" 2>/dev/null || true
+    proxy_pid=""
+    mcpruntime_adapter_require_free_port "$listen"
     return 1
   fi
 
@@ -914,7 +924,9 @@ adapter_call_add_for() {
         echo "tools/call timed out waiting for gateway access policy for profile ${profile}" >&2
         cat "$result_body" >&2
         kill "$proxy_pid" >/dev/null 2>&1 || true
-        stop_listen_port "$listen"
+        wait "$proxy_pid" 2>/dev/null || true
+        proxy_pid=""
+        mcpruntime_adapter_require_free_port "$listen"
         return 1
       fi
       sleep 3
@@ -923,7 +935,9 @@ adapter_call_add_for() {
     echo "tools/call returned HTTP ${status} for profile ${profile}" >&2
     cat "$result_body" >&2
     kill "$proxy_pid" >/dev/null 2>&1 || true
-    stop_listen_port "$listen"
+    wait "$proxy_pid" 2>/dev/null || true
+    proxy_pid=""
+    mcpruntime_adapter_require_free_port "$listen"
     return 1
   done
 
@@ -933,12 +947,16 @@ adapter_call_add_for() {
     echo "adapter add result was ${result}, expected ${expected} for profile ${profile}" >&2
     cat "$result_body" >&2
     kill "$proxy_pid" >/dev/null 2>&1 || true
-    stop_listen_port "$listen"
+    wait "$proxy_pid" 2>/dev/null || true
+    proxy_pid=""
+    mcpruntime_adapter_require_free_port "$listen"
     return 1
   fi
 
   kill "$proxy_pid" >/dev/null 2>&1 || true
-  stop_listen_port "$listen"
+  wait "$proxy_pid" 2>/dev/null || true
+  proxy_pid=""
+  mcpruntime_adapter_require_free_port "$listen"
 }
 
 adapter_call_add() {
@@ -980,7 +998,7 @@ print_cursor_config() {
   cat <<JSON
 
 HTTP adapter config:
-MCP_PLATFORM_API_PROFILE=${GLOBEX_PROFILE} ${BIN} adapter proxy \\
+MCP_RUNTIME_CONFIG_DIR=${MCP_RUNTIME_CONFIG_DIR} MCP_PLATFORM_API_PROFILE=${GLOBEX_PROFILE} ${BIN} adapter proxy \\
   --platform-url ${PLATFORM_URL} \\
   --runtime-url ${MCP_URL}/${ACME_SERVER}/mcp \\
   --server ${ACME_SERVER} \\
@@ -1011,8 +1029,14 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 mkdir -p "$MCP_RUNTIME_CONFIG_DIR" "$WORK_DIR"
-stop_listen_port "$ADAPTER_LISTEN"
-stop_listen_port "${TECHCORP_ADAPTER_LISTEN:-127.0.0.1:8300}"
+chmod 700 "$MCP_RUNTIME_CONFIG_DIR" "$WORK_DIR"
+proxy_pid=""
+cleanup_proxy() {
+  if [[ -n "$proxy_pid" ]]; then kill "$proxy_pid" 2>/dev/null || true; wait "$proxy_pid" 2>/dev/null || true; fi
+}
+trap cleanup_proxy EXIT
+mcpruntime_adapter_require_free_port "$ADAPTER_LISTEN"
+mcpruntime_adapter_require_free_port "${TECHCORP_ADAPTER_LISTEN:-127.0.0.1:8300}"
 
 if [[ "${SKIP_SETUP:-0}" != "1" ]]; then
   setup_demo
@@ -1036,7 +1060,7 @@ verify_grant_exists "$ACME_PROFILE" "${ACME_SERVER}-${TECHCORP_SLUG}-grant" "$AC
 
 verify_no_kubeconfig_ops
 
-delete_all_sessions "$ACME_PROFILE" "$ACME_NS"
+delete_demo_sessions "$ACME_PROFILE" "$ACME_NS"
 
 wait_for_public_mcp_route
 verify_direct_public_denied

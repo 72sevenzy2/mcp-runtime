@@ -6,8 +6,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 # Minimum Go for the main module (align with go.mod "go" directive).
-REQUIRED_GO_MAJOR=1
-REQUIRED_GO_MINOR=25
+required_go="$(awk '$1 == "go" {print $2; exit}' go.mod)"
+IFS=. read -r REQUIRED_GO_MAJOR REQUIRED_GO_MINOR REQUIRED_GO_PATCH <<<"$required_go"
 
 log() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
@@ -19,37 +19,25 @@ go_version_ok() {
 	# e.g. "go version go1.25.0 darwin/arm64" or "go1.25.0"
 	local ver
 	ver=$(go version | awk '{print $3}' | sed 's/^go//')
-	local major minor
-	IFS=. read -r major minor _ <<<"$ver"
+	local major minor patch
+	IFS=. read -r major minor patch <<<"$ver"
 	[[ -n "${major:-}" && -n "${minor:-}" ]] || return 1
 	if (( major > REQUIRED_GO_MAJOR )); then return 0; fi
 	if (( major < REQUIRED_GO_MAJOR )); then return 1; fi
-	if (( minor >= REQUIRED_GO_MINOR )); then return 0; fi
+	if (( minor > REQUIRED_GO_MINOR )); then return 0; fi
+	if (( minor == REQUIRED_GO_MINOR && ${patch:-0} >= REQUIRED_GO_PATCH )); then return 0; fi
 	return 1
 }
 
 cmd_go_modules() {
 	log "Resolving Go modules (root)..."
 	go mod download
-	go mod tidy
 
-	local mods=(
-		"examples/oauth-example-go-2025-11-25"
-		"services/platform-api"
-		"services/runtime-api"
-		"services/analytics-api"
-		"services/ingest"
-		"services/mcp-gateway"
-		"services/processor"
-		"services/ui"
-		"traefik-plugins/pii-redactor"
-		"traefik-plugins/spiffe-identity"
-	)
-	for mod in "${mods[@]}"; do
-		if [[ -f "$mod/go.mod" ]]; then
-			log "Resolving Go modules ($mod)..."
-			( cd "$mod" && go mod download )
-		fi
+	local modfile
+	for modfile in services/*/go.mod examples/*/go.mod traefik-plugins/*/go.mod; do
+		[[ -f "$modfile" ]] || continue
+		log "Resolving Go modules (${modfile%/go.mod})..."
+		( cd "${modfile%/go.mod}" && go mod download )
 	done
 	log "Go modules are ready."
 }
@@ -107,6 +95,12 @@ cmd_check() {
 		warn "python3 not in PATH (e2e and traffic generation use it)."
 		missing=1
 	fi
+	if command -v shellcheck >/dev/null 2>&1; then
+		log "shellcheck: present (offline automation gate)"
+	else
+		warn "shellcheck is required for hack/ci/check-scripts.sh (apt-get install shellcheck or brew install shellcheck)."
+		missing=1
+	fi
 	if command -v kind >/dev/null 2>&1; then
 		log "kind: present ($(command -v kind)) (optional local clusters)"
 	else
@@ -152,7 +146,7 @@ docker_daemon_reachable() {
 
 cmd_install() {
 	local missing_basics=()
-	for tool in make curl jq python3; do
+	for tool in make curl jq python3 shellcheck; do
 		if ! command -v "$tool" >/dev/null 2>&1; then
 			missing_basics+=("$tool")
 		fi
@@ -184,10 +178,10 @@ cmd_install() {
 			log "Installing Go with Homebrew..."
 			brew install go
 		elif have_apt; then
-			warn "Go 1.25+ is not in default Debian/Ubuntu apt on many versions."
+			warn "Go ${required_go}+ is not in default Debian/Ubuntu apt on many versions."
 			warn "Install from https://go.dev/dl/ or use Homebrew; then re-run: make deps-check"
 		else
-			warn "Install Go 1.25+ from https://go.dev/dl/ for this OS."
+			warn "Install Go ${required_go}+ from https://go.dev/dl/ for this OS."
 		fi
 	fi
 	if ! command -v docker >/dev/null 2>&1; then
@@ -236,8 +230,8 @@ cmd_install() {
 
 usage() {
 	log "Usage: $0 {go|check|install}"
-	log "  go      Download and tidy the main module; download nested service/example modules"
-	log "  check   Verify go, docker daemon, kubectl, make, curl, jq, python3, and optional kind; STRICT_DEPS_CHECK=1 fails on required misses"
+	log "  go      Download the main module; download nested service/example modules"
+	log "  check   Verify go, docker daemon, kubectl, make, curl, jq, python3, shellcheck, and optional kind; STRICT_DEPS_CHECK=1 fails on required misses"
 	log "  install Best-effort install of go, docker client, kubectl, make, curl, jq, python3, and kind on Homebrew/apt hosts"
 }
 

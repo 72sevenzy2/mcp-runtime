@@ -52,9 +52,9 @@ build-unix: build-all ## Alias for build-all to keep CI targets stable.
 dev: build ## Build and run CLI in development mode.
 	./$(BUILD_DIR)/$(BINARY_NAME)
 
-deps: deps-check deps-go ## Verify host tools, then download Go modules (Go 1.25+, docker, kubectl).
+deps: deps-check deps-go ## Verify host tools, then download Go modules (Go version from go.mod, docker, kubectl).
 
-deps-go: ## Go mod download and tidy (root) plus go mod download for each nested module in services/ and examples/.
+deps-go: ## Download Go dependencies for root, service, example and plugin modules.
 	@./hack/dev/deps.sh go
 
 deps-check: ## Verify toolchain on PATH. Set STRICT_DEPS_CHECK=1 to fail the recipe if a tool is missing.
@@ -66,10 +66,10 @@ deps-install: ## Best-effort install of host tools where supported (Go, Docker c
 ##@ Testing
 
 test: ## Run all tests.
-	go test -v ./...
+	hack/ci/go-test.sh . -v ./...
 
 coverage: ## Generate code coverage report.
-	go test -coverprofile=coverage.out ./...
+	hack/ci/go-test.sh . -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
