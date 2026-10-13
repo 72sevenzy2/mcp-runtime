@@ -11,6 +11,11 @@ Earlier release notes remain available in [GitHub Releases](https://github.com/m
 
 - Request tracing adds gateway stage spans, internal HTTP connection-phase events, asynchronous analytics classification and instrumented MCP-server execution in the shipped Go example. Managed ingress uses Traefik 3.7.14 with OTLP tracing and credential-free JSON access logs; distribution-managed Traefik 2 requires an explicit upgrade. Traefik v3 CRDs and read-only EndpointSlice/ConfigMap/Node discovery permissions ship together, including dynamic team namespaces, to preserve API and MCP routes. Explicit workload OTEL settings are preserved. Normal telemetry continues to exclude tool bodies and credentials. ([#700](https://github.com/mcp-runtime/mcp-runtime/issues/700))
 
+- Runtime HTTP responses expose the active `X-Trace-ID` for client-to-log/trace lookup, with gateway protection against upstream header overrides. Shared API service logs and HTTP metric labels honor the configured `OTEL_SERVICE_NAME` consistently with tracing; custom service names require matching metric queries. Gateway completion records include configured tool, server/namespace and policy-version context; upstream failure records use safe reason codes. Grafana adds trace-to-log and trace-to-metric navigation ([#728](https://github.com/mcp-runtime/mcp-runtime/issues/728)).
+
+
+- HTTP service completion logs use quoted logfmt fields with service identity, route templates, status, duration and trace/span IDs. Raw request URLs are omitted and healthy probes are quiet; failed probes remain visible. Gateway completion logs now expose allowed, denied and skipped request outcomes. The request debugging guide connects MCPSnoop, Tempo, metrics, logs and read-only Kubernetes diagnostics ([#498](https://github.com/mcp-runtime/mcp-runtime/issues/498)).
+
 - Service HTTP latency histograms attach sampled trace exemplars to connect platform API metrics to the same request trace, without trace IDs as metric labels ([#728](https://github.com/mcp-runtime/mcp-runtime/issues/728)).
 
 - Gateway metrics now distinguish configured tools, policy outcomes and HTTP status, with slow-tool latency buckets and sampled trace exemplars. Tool labels are bounded; unknown names share one bucket. Prometheus/Grafana can link a latency observation to Tempo. ([#300](https://github.com/mcp-runtime/mcp-runtime/issues/300))
@@ -41,6 +46,7 @@ are no CRD changes.
 
 - Go dependencies are updated across the root module and every service module (ClickHouse client, Prometheus client, OpenTelemetry, `golang.org/x/crypto`, `pterm` and others); service modules are tidied against the root.
 
+- HTTP service completion logs use quoted logfmt fields with service identity, route templates, status, duration and trace/span IDs. Raw request URLs are omitted and healthy probes are quiet; failed probes remain visible. Gateway completion logs now expose allowed, denied and skipped request outcomes. The request debugging guide connects MCPSnoop, Tempo, metrics, logs and read-only Kubernetes diagnostics ([#498](https://github.com/mcp-runtime/mcp-runtime/issues/498)).
 
 - Repository automation is grouped under `hack/dev`, `hack/ci`, `hack/qa`, `hack/deploy` and `hack/release`. Reference helpers move to `hack/deploy/reference`, hosted acceptance to `hack/deploy/acceptance`, and destructive `clean.sh` becomes `reset.sh`. Update local invocations to the paths in `hack/README.md`; old-path wrappers are not provided. Agent guidance now routes tasks to the catalogue and focused runbooks.
 
